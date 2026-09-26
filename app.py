@@ -157,8 +157,7 @@ with tab4:
     st.subheader("2. Signal Volume & Escalation Trends Over Time")
     if 'signal_sanasi' in master_df.columns:
         master_df['signal_sanasi'] = pd.to_datetime(master_df['signal_sanasi'])
-        time_df = master_df.groupby([pd.Grouper(key='signal_sanasi', freq='M'), 'eskalatsiya']).size().reset_index(name='Count')
-        fig2 = px.line(
+        time_df = master_df.groupby([pd.Grouper(key='signal_sanasi', freq='ME'), 'eskalatsiya']).size().reset_index(name='Count')
             time_df, x='signal_sanasi', y='Count', color='eskalatsiya',
             labels={'signal_sanasi': 'Date', 'Count': 'Alert Count', 'eskalatsiya': 'Escalation Status'},
             color_discrete_map={0: '#2E86C1', 1: '#E74C3C'},
