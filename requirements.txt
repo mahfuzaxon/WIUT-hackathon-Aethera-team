@@ -1,0 +1,7 @@
+streamlit
+pandas
+plotly
+pyarrow -e streamlit
+pandas
+plotly
+pyarrow
