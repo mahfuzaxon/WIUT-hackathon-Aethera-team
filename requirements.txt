@@ -1,7 +1,8 @@
 streamlit
 pandas
+numpy
+matplotlib
 plotly
-pyarrow -e streamlit
-pandas
-plotly
+scikit-learn
+lightgbm
 pyarrow
