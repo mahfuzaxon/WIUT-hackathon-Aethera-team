@@ -8,19 +8,13 @@ st.set_page_config(page_title="Fintech Risk Alert Analysis", layout="wide")
 st.title("🚨 Fraud & Alert Escalation EDA Dashboard")
 st.markdown("Exploratory Data Analysis for automated financial monitoring alerts.")
 
-# Автоматическое определение пути к данным (работает и локально, и на сервере)
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = "/Users/Mahfuzaxon/Desktop/fintech_data"
 
 @st.cache_data
 def load_data():
-    signals_path = os.path.join(BASE_DIR, "train_signals.csv")
-    tx_path = os.path.join(BASE_DIR, "train_transactions.parquet")
+    signals_path = os.path.join(DATA_DIR, "train_signals.csv")
+    tx_path = os.path.join(DATA_DIR, "train_transactions.parquet")
     
-    # Если запуск локальный с кастомным путем
-    if not os.path.exists(signals_path):
-        signals_path = "/Users/Mahfuzaxon/Desktop/fintech_data/train_signals.csv"
-        tx_path = "/Users/Mahfuzaxon/Desktop/fintech_data/train_transactions.parquet"
-        
     train_signals = pd.read_csv(signals_path)
     train_tx = pd.read_parquet(tx_path)
     return train_signals, train_tx
