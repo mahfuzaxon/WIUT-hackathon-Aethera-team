@@ -120,7 +120,7 @@ with tab3:
     except Exception:
         time_df = master_df.groupby([pd.Grouper(key='signal_sanasi', freq='M'), 'eskalatsiya']).size().reset_index(name='Count')
     fig2 = px.line(time_df, x='signal_sanasi', y='Count', color='eskalatsiya',
-                   color_discrete_map={0: '#2E86C1', '1': '#E74C3C'},
+                   color_discrete_map={0: '#2E86C1', 1: '#E74C3C'},
                    title="Monthly Security Signal Volume Dynamics")
     st.plotly_chart(fig2, use_container_width=True)
     st.info("💡 **Insight:** Alert volumes remain stable over time, showing consistent fraud rates without seasonal distortion.")
@@ -195,101 +195,4 @@ with tab5:
     * **Short-term velocity spikes (`burst_ratio_3d_30d`) and outgoing international transfers (`xalqaro`)** are the strongest behavioral predictors of fraud escalation.
     * Transforming nearly 7 million raw transaction rows into 26 normalized, signal-level features enabled our LightGBM model to effectively isolate true fraud risks ($1$) from high-volume false alarms ($0$).
     * All test predictions have been successfully generated, verified, and saved into `team_Aethera.csv` for hackathon submission.
-    """)        st.checkbox("Explanation of feature engineering & modeling", value=True, disabled=True)
-        st.checkbox("Brief conclusion summarizing key findings", value=True, disabled=True)
-    st.success("🎉 Status: 100% Complete & Fully Compliant.")
-
-# TAB 1: SUMMARY
-with tab2:
-    st.header("Executive Summary & Approach")
-    st.write("Team Aethera built an end-to-end ML pipeline predicting security alert escalations using 26 engineered behavioral features.")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Training Signals", "14,000")
-    col2.metric("Escalation Rate", "17.18%")
-    col3.metric("Total Transactions", "6,987,663")
-
-# TAB 2: STRUCTURE
-with tab3:
-    st.header("Dataset Overview & Relational Structure")
-    st.markdown("""
-    * **`train_signals.csv`**: Alert metadata containing `signal_id`, `signal_sanasi`, and target `eskalatsiya`.
-    * **`train_transactions.parquet`**: Raw log streams containing timestamps, transfer direction (`kirim`/`chiqim`), and payment channels (`xalqaro`).
     """)
-
-# TAB 3: EDA & 6 CHARTS
-with tab4:
-    st.header("Exploratory Data Analysis: 6 Interactive Visualizations")
-    
-    # Chart 1
-    st.subheader("1. Target Class Distribution")
-    t_counts = master_df['eskalatsiya'].value_counts().reset_index()
-    t_counts.columns = ['Status', 'Count']
-    t_counts['Status_Name'] = t_counts['Status'].map({0: 'Dismissed (0)', 1: 'Escalated (1)'})
-    fig1 = px.pie(t_counts, values='Count', names='Status_Name', color='Status_Name',
-                  color_discrete_map={'Dismissed (0)': '#2E86C1', 'Escalated (1)': '#E74C3C'}, hole=0.4)
-    st.plotly_chart(fig1, use_container_width=True)
-    st.info("💡 Insight: 17.18% escalation rate shows heavy class imbalance, requiring Stratified CV.")
-
-    st.divider()
-
-    # Chart 2
-    st.subheader("2. Signal Volume Trends Over Time")
-    master_df['signal_sanasi'] = pd.to_datetime(master_df['signal_sanasi'])
-    try:
-        time_df = master_df.groupby([pd.Grouper(key='signal_sanasi', freq='ME'), 'eskalatsiya']).size().reset_index(name='Count')
-    except Exception:
-        time_df = master_df.groupby([pd.Grouper(key='signal_sanasi', freq='M'), 'eskalatsiya']).size().reset_index(name='Count')
-    fig2 = px.line(time_df, x='signal_sanasi', y='Count', color='eskalatsiya',
-                   color_discrete_map={0: '#2E86C1', 1: '#E74C3C'})
-    st.plotly_chart(fig2, use_container_width=True)
-    st.info("💡 Insight: Alert volumes remain stable over time.")
-
-    st.divider()
-
-    # Chart 3
-    st.subheader("3. Incoming vs Outgoing Behavior")
-    fig3 = px.box(master_df, x='eskalatsiya', y='dir_ratio_chiqim', color='eskalatsiya',
-                  color_discrete_map={0: '#2E86C1', 1: '#E74C3C'})
-    st.plotly_chart(fig3, use_container_width=True)
-    st.info("💡 Insight: Escalated alerts show a heavy skew toward outgoing transfers (`chiqim`).")
-
-    st.divider()
-
-    # Chart 4
-    st.subheader("4. Payment Channel Breakdown (International Transfers)")
-    fig4 = px.histogram(master_df, x='type_ratio_xalqaro', color='eskalatsiya', barmode='overlay',
-                        color_discrete_map={0: '#2E86C1', 1: '#E74C3C'})
-    st.plotly_chart(fig4, use_container_width=True)
-    st.info("💡 Insight: High international wire ratios (`xalqaro`) strongly correlate with fraud.")
-
-    st.divider()
-
-    # Chart 5
-    st.subheader("5. Transaction Size Distribution")
-    fig5 = px.scatter(master_df, x='avg_amount', y='max_amount', color='eskalatsiya',
-                      color_discrete_map={0: '#2E86C1', 1: '#E74C3C'})
-    st.plotly_chart(fig5, use_container_width=True)
-    st.info("💡 Insight: Fraudulent signals feature extreme single-transaction spikes (`max_amount`).")
-
-    st.divider()
-
-    # Chart 6
-    st.subheader("6. Pre-Signal Activity Surge (Burst Velocity)")
-    fig6 = px.box(master_df, x='eskalatsiya', y='burst_ratio_3d_30d', color='eskalatsiya',
-                  color_discrete_map={0: '#2E86C1', 1: '#E74C3C'})
-    st.plotly_chart(fig6, use_container_width=True)
-    st.info("💡 Insight: 3-day transaction spikes (`burst_ratio_3d_30d`) are the strongest fraud predictor.")
-
-# TAB 4: MODELING
-with tab5:
-    st.header("Modeling Strategy")
-    st.markdown("""
-    1. **Feature Engineering**: Converted 7M raw rows into 26 normalized behavioral metrics.
-    2. **Model**: Trained a 5-Fold Stratified LightGBM classifier.
-    3. **Validation**: Preserved 17.18% class ratio across all folds to prevent bias.
-    """)
-
-# TAB 5: CONCLUSION
-with tab6:
-    st.header("Conclusion")
-    st.success("Short-term velocity spikes and outgoing international transfers are the primary drivers of banking signal escalation.")
