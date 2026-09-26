@@ -1,254 +1,220 @@
-import streamlit as st
-import pandas as pd
+"""
+Team Aethera — WIUT FinTech Hackathon
+End-to-end pipeline: feature engineering + EDA + 5-fold LightGBM.
+
+Expected input files (edit paths in main() if yours differ):
+    train_signals.csv        -> signal_id, signal_sanasi, eskalatsiya
+    train_transactions.parquet -> signal_id, tranzaksiya_vaqti, kirim/chiqim,
+                                   karta/bank_otkazmasi/naqd/xalqaro, miqdor_indeksi
+    test_signals.csv
+    test_transactions.parquet
+
+Output:
+    team_Aethera.csv          -> signal_id, eskalatsiya (probability)
+    eda_plots/*.png           -> the charts used in the EDA writeup
+"""
+
+import os
 import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import roc_auc_score
+import lightgbm as lgb
 
-st.set_page_config(
-    page_title="Team Aethera - WIUT FinTech Hackathon",
-    page_icon="🛡️",
-    layout="wide"
-)
+PLOT_DIR = "eda_plots"
+NIGHT_START, NIGHT_END = 0, 5  # 00:00–05:00
 
-# --- TITLE & HEADER ---
-st.title("🛡️ Team Aethera: Fraud Signal Escalation Dashboard")
-st.caption("WIUT FinTech Hackathon 2026 | End-to-End EDA & Machine Learning Pipeline")
 
-# --- DATA LOADING (CACHED) ---
-@st.cache_data
-def load_data():
-    try:
-        df = pd.read_csv("master_unified_dataset.csv")
-    except:
-        # Fallback simulation for demonstration if file is not present locally
-        np.random.seed(42)
-        n = 1000
-        df = pd.DataFrame({
-            'signal_id': [f'SG_{i:06d}' for i in range(n)],
-            'signal_sanasi': pd.date_range(start='2025-01-01', periods=n, freq='D'),
-            'eskalatsiya': np.random.choice([0, 1], size=n, p=[0.8282, 0.1718]),
-            'total_tx_count': np.random.randint(10, 500, size=n),
-            'total_amount': np.random.uniform(10, 300, size=n),
-            'avg_amount': np.random.uniform(0.01, 5.0, size=n),
-            'max_amount': np.random.uniform(1.0, 20.0, size=n),
-            'night_tx_ratio': np.random.uniform(0.0, 0.6, size=n),
-            'burst_ratio_3d_30d': np.random.uniform(0.05, 0.8, size=n),
-            'dir_ratio_kirim': np.random.uniform(0.1, 0.9, size=n),
-            'dir_ratio_chiqim': np.random.uniform(0.1, 0.9, size=n),
-            'type_ratio_karta': np.random.uniform(0.1, 0.7, size=n),
-            'type_ratio_bank_otkazmasi': np.random.uniform(0.0, 0.3, size=n),
-            'type_ratio_xalqaro': np.random.uniform(0.0, 0.4, size=n),
-        })
-    return df
+# --------------------------------------------------------------------------
+# 1. Feature engineering
+# --------------------------------------------------------------------------
+def build_features(signals: pd.DataFrame, transactions: pd.DataFrame) -> pd.DataFrame:
+    """
+    Joins signals to their pre-alert transaction history and returns one row
+    per signal_id with the 26 engineered behavioral features.
+    """
+    signals = signals.copy()
+    signals["signal_sanasi"] = pd.to_datetime(signals["signal_sanasi"])
 
-master_df = load_data()
-
-# --- TAB NAVIGATION ---
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "📋 Requirements Checklist",
-    "📌 1. Executive Summary", 
-    "🗂️ 2. Dataset Overview", 
-    "📊 3. EDA & Visualizations", 
-    "⚙️ 4. Modeling Strategy", 
-    "🎯 5. Conclusion"
-])
-
-# ==========================================
-# TAB 0: COMPLIANCE CHECKLIST
-# ==========================================
-with tab1:
-    st.header("✅ Hackathon Deliverables & Requirements Tracker")
-    st.write("This checklist confirms full compliance with all official WIUT FinTech Hackathon website guidelines:")
-    
-    col_c1, col_c2 = st.columns(2)
-    
-    with col_c1:
-        st.subheader("Mandatory Website Elements")
-        st.checkbox("Short description of team approach", value=True, disabled=True)
-        st.checkbox("Overview of dataset and its structure", value=True, disabled=True)
-        st.checkbox("Several meaningful EDA visualizations (6 Interactive Charts)", value=True, disabled=True)
-        st.checkbox("Key observations & insights from transaction history", value=True, disabled=True)
-        st.checkbox("Target distribution & behavioral pattern analysis", value=True, disabled=True)
-        st.checkbox("Explanation of feature engineering & modeling ideas", value=True, disabled=True)
-        st.checkbox("Brief conclusion summarizing key findings", value=True, disabled=True)
-
-    with col_c2:
-        st.subheader("Specific Analytical Topics Covered")
-        st.checkbox("Transaction activity over time (Chart 1)", value=True, disabled=True)
-        st.checkbox("Incoming vs. Outgoing transfer behavior (Chart 2)", value=True, disabled=True)
-        st.checkbox("Differences between transaction types (Chart 3)", value=True, disabled=True)
-        st.checkbox("Transaction-size distributions (Chart 4)", value=True, disabled=True)
-        st.checkbox("Activity immediately before a signal / Burst Velocity (Chart 5)", value=True, disabled=True)
-        st.checkbox("Behavioral differences (Dismissed vs Escalated) (Chart 6)", value=True, disabled=True)
-
-    st.success("🎉 **Status: 100% Complete & Fully Compliant.**")
-
-# ==========================================
-# TAB 1: EXECUTIVE SUMMARY
-# ==========================================
-with tab2:
-    st.header("Executive Summary & Problem Approach")
-    st.markdown("""
-    **Team Aethera** developed an end-to-end Machine Learning pipeline to predict whether automated banking security alerts (`signal_id`) 
-    will be **Escalated (1 - True Fraud Risk)** or **Dismissed (0 - False Alarm)**.
-    
-    By aggregating **6,987,663 historical transaction records** across 14,000 security signals, we engineered 26 behavioral features 
-    capturing **Burst Velocity** (short-term activity spikes), **Off-Peak Night Activity**, and **Transfer Channel Ratios**.
-    """)
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Training Signals", "14,000", help="Total security alerts evaluated")
-    col2.metric("Escalation Rate (Fraud)", "17.18%", help="Proportion of true fraud alerts (Class Imbalance)")
-    col3.metric("Total Transactions Analyzed", "6,987,663", help="Raw historical transaction rows aggregated")
-
-# ==========================================
-# TAB 2: DATASET OVERVIEW
-# ==========================================
-with tab3:
-    st.header("Dataset Overview & Relational Structure")
-    st.write("""
-    The dataset consists of two relational sources linked together via `signal_id`. To prevent data leakage, transaction time windows 
-    were strictly filtered relative to each signal's alert date (`signal_sanasi`).
-    """)
-    
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.subheader("1. `train_signals.csv` (Alert Metadata)")
-        st.markdown("""
-        * **`signal_id`**: Unique alert identifier (Primary Key).
-        * **`signal_sanasi`**: Date when the alert triggered.
-        * **`eskalatsiya`**: Target label ($0 = \\text{Dismissed}$, $1 = \\text{Escalated}$).
-        """)
-    
-    with col_b:
-        st.subheader("2. `train_transactions.parquet` (Transaction Logs)")
-        st.markdown("""
-        * **`signal_id`**: Foreign key linking transaction to alert.
-        * **`tranzaksiya_vaqti`**: Exact timestamp of transfer.
-        * **`kirim_chiqim`**: Direction (`kirim` / `chiqim`).
-        * **`tranzaksiya_turi`**: Payment method (`karta`, `bank_otkazmasi`, `naqd`, `xalqaro`).
-        * **`miqdor_indeksi`**: Standardized transaction size index.
-        """)
-
-# ==========================================
-# TAB 3: EDA & VISUALIZATIONS
-# ==========================================
-with tab4:
-    st.header("Exploratory Data Analysis: Key Behavioral Patterns")
-    st.write("Below are 6 interactive visualizations examining target distribution and transaction patterns:")
-    
-    # CHART 1: Target Distribution
-    st.subheader("1. Target Class Distribution (Imbalance Analysis)")
-    target_counts = master_df['eskalatsiya'].value_counts().reset_index()
-    target_counts.columns = ['Status', 'Count']
-    target_counts['Status_Name'] = target_counts['Status'].map({0: 'Dismissed (0)', 1: 'Escalated (1)'})
-    
-    fig1 = px.pie(
-        target_counts, values='Count', names='Status_Name', color='Status_Name',
-        color_discrete_map={'Dismissed (0)': '#2E86C1', 'Escalated (1)': '#E74C3C'},
-        hole=0.4, title="Target Escalation Distribution (82.8% Dismissed vs 17.2% Escalated)"
+    tx = transactions.merge(
+        signals[["signal_id", "signal_sanasi"]], on="signal_id", how="inner"
     )
-    st.plotly_chart(fig1, use_container_width=True)
-    st.info("💡 **Insight:** The severe class imbalance (17.18% fraud) motivated our use of 5-Fold Stratified Cross-Validation during training.")
+    tx["tranzaksiya_vaqti"] = pd.to_datetime(tx["tranzaksiya_vaqti"])
 
-    st.divider()
+    # Leakage guard: keep only transactions on/before the alert date.
+    delta_days = (tx["signal_sanasi"] - tx["tranzaksiya_vaqti"]).dt.total_seconds() / 86400
+    tx = tx.loc[delta_days >= 0].copy()
+    tx["delta_days"] = delta_days.loc[tx.index]
+    tx["hour"] = tx["tranzaksiya_vaqti"].dt.hour
 
-    # CHART 2: Activity Over Time
-    st.subheader("2. Signal Volume & Escalation Trends Over Time")
-    if 'signal_sanasi' in master_df.columns:
-        master_df['signal_sanasi'] = pd.to_datetime(master_df['signal_sanasi'])
-        time_df = master_df.groupby([pd.Grouper(key='signal_sanasi', freq='ME'), 'eskalatsiya']).size().reset_index(name='Count')
-            time_df, x='signal_sanasi', y='Count', color='eskalatsiya',
-            labels={'signal_sanasi': 'Date', 'Count': 'Alert Count', 'eskalatsiya': 'Escalation Status'},
-            color_discrete_map={0: '#2E86C1', 1: '#E74C3C'},
-            title="Monthly Security Signal Volume Dynamics"
+    rows = []
+    for sid, g in tx.groupby("signal_id"):
+        amt = g["miqdor_indeksi"]
+
+        def window(days):
+            w = g.loc[g["delta_days"] <= days]
+            return len(w), w["miqdor_indeksi"].sum()
+
+        cnt_1d, sum_1d = window(1)
+        cnt_3d, sum_3d = window(3)
+        cnt_7d, sum_7d = window(7)
+        cnt_30d, sum_30d = window(30)
+
+        total_tx_count = len(g)
+        night_mask = g["hour"].between(NIGHT_START, NIGHT_END, inclusive="left")
+        signal_date = signals.loc[signals["signal_id"] == sid, "signal_sanasi"].iloc[0]
+
+        rows.append({
+            "signal_id": sid,
+            # A. central tendency & volatility
+            "total_tx_count": total_tx_count,
+            "total_amount": amt.sum(),
+            "avg_amount": amt.mean(),
+            "max_amount": amt.max(),
+            "amount_std": amt.std(ddof=0),
+            # B. off-peak & recency
+            "night_tx_ratio": night_mask.mean(),
+            "last_tx_days": g["delta_days"].min(),
+            "tx_time_span": g["delta_days"].max() - g["delta_days"].min(),
+            # C. time-windowed aggregations
+            "tx_cnt_1d": cnt_1d, "amt_sum_1d": sum_1d,
+            "tx_cnt_3d": cnt_3d, "amt_sum_3d": sum_3d,
+            "tx_cnt_7d": cnt_7d, "amt_sum_7d": sum_7d,
+            "tx_cnt_30d": cnt_30d, "amt_sum_30d": sum_30d,
+            # D. directional & channel shares
+            "dir_ratio_kirim": (g["kirim_chiqim"] == "kirim").mean(),
+            "dir_ratio_chiqim": (g["kirim_chiqim"] == "chiqim").mean(),
+            "type_ratio_karta": (g["tolov_turi"] == "karta").mean(),
+            "type_ratio_bank_otkazmasi": (g["tolov_turi"] == "bank_otkazmasi").mean(),
+            "type_ratio_naqd": (g["tolov_turi"] == "naqd").mean(),
+            "type_ratio_xalqaro": (g["tolov_turi"] == "xalqaro").mean(),
+            # E. seasonal
+            "signal_month": signal_date.month,
+            "signal_dayofweek": signal_date.dayofweek,
+        })
+
+    feats = pd.DataFrame(rows)
+    feats["burst_ratio_3d_30d"] = (feats["tx_cnt_3d"] + 1) / (feats["tx_cnt_30d"] + 1)
+    feats["amount_ratio_3d_30d"] = (feats["amt_sum_3d"] + 1) / (feats["amt_sum_30d"] + 1)
+
+    return signals.merge(feats, on="signal_id", how="left")
+
+
+# --------------------------------------------------------------------------
+# 2. EDA plots (matches the charts used in the writeup)
+# --------------------------------------------------------------------------
+def make_eda_plots(df: pd.DataFrame):
+    os.makedirs(PLOT_DIR, exist_ok=True)
+    target = "eskalatsiya"
+
+    # -- Target class distribution -----------------------------------------
+    counts = df[target].value_counts().sort_index()
+    plt.figure(figsize=(5, 4))
+    plt.bar(["Dismissed (0)", "Escalated (1)"], counts.values, color=["#3FA98A", "#E15241"])
+    for i, v in enumerate(counts.values):
+        plt.text(i, v, f"{v:,}\n({v/counts.sum():.1%})", ha="center", va="bottom")
+    plt.title("Target class distribution")
+    plt.tight_layout()
+    plt.savefig(f"{PLOT_DIR}/target_distribution.png", dpi=150)
+    plt.close()
+
+    # -- Behavioral comparison: dismissed vs escalated means ----------------
+    ratio_features = [
+        "burst_ratio_3d_30d", "amount_ratio_3d_30d",
+        "dir_ratio_chiqim", "type_ratio_xalqaro", "night_tx_ratio",
+    ]
+    means = df.groupby(target)[ratio_features].mean().T
+    means.columns = ["Dismissed", "Escalated"]
+
+    x = np.arange(len(ratio_features))
+    width = 0.35
+    plt.figure(figsize=(8, 5))
+    plt.barh(x - width / 2, means["Dismissed"], height=width, label="Dismissed", color="#3FA98A")
+    plt.barh(x + width / 2, means["Escalated"], height=width, label="Escalated", color="#E15241")
+    plt.yticks(x, ratio_features)
+    plt.xlabel("Mean value")
+    plt.title("Behavioral ratios: dismissed vs. escalated")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f"{PLOT_DIR}/behavioral_comparison.png", dpi=150)
+    plt.close()
+
+    # -- Burst velocity distribution by class --------------------------------
+    plt.figure(figsize=(6, 4))
+    df.boxplot(column="burst_ratio_3d_30d", by=target, grid=False)
+    plt.title("Burst ratio (3d/30d) by class")
+    plt.suptitle("")
+    plt.xlabel("eskalatsiya")
+    plt.tight_layout()
+    plt.savefig(f"{PLOT_DIR}/burst_ratio_by_class.png", dpi=150)
+    plt.close()
+
+    print(f"Saved EDA plots to ./{PLOT_DIR}/")
+
+
+# --------------------------------------------------------------------------
+# 3. Modeling: 5-fold stratified LightGBM
+# --------------------------------------------------------------------------
+def train_and_predict(train_df: pd.DataFrame, test_df: pd.DataFrame, feature_cols: list):
+    X = train_df[feature_cols]
+    y = train_df["eskalatsiya"]
+    X_test = test_df[feature_cols]
+
+    oof_preds = np.zeros(len(train_df))
+    test_preds = np.zeros(len(test_df))
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+    for fold, (tr_idx, val_idx) in enumerate(skf.split(X, y), start=1):
+        model = lgb.LGBMClassifier(
+            n_estimators=500,
+            learning_rate=0.03,
+            num_leaves=31,
+            random_state=42,
         )
-        st.plotly_chart(fig2, use_container_width=True)
-        st.info("💡 **Insight:** Alert volumes remain steady over time, showing consistent fraud rates without extreme seasonal spikes.")
-
-    st.divider()
-
-    # CHART 3: Incoming vs Outgoing
-    st.subheader("3. Directional Behavior: Incoming (`kirim`) vs Outgoing (`chiqim`)")
-    if 'dir_ratio_chiqim' in master_df.columns:
-        fig3 = px.box(
-            master_df, x='eskalatsiya', y='dir_ratio_chiqim', color='eskalatsiya',
-            color_discrete_map={0: '#2E86C1', 1: '#E74C3C'},
-            labels={'eskalatsiya': 'Status', 'dir_ratio_chiqim': 'Outgoing Transfer Ratio'},
-            title="Outgoing Transfer Proportion Comparison"
+        model.fit(
+            X.iloc[tr_idx], y.iloc[tr_idx],
+            eval_set=[(X.iloc[val_idx], y.iloc[val_idx])],
+            eval_metric="auc",
+            callbacks=[lgb.early_stopping(50, verbose=False)],
         )
-        st.plotly_chart(fig3, use_container_width=True)
-        st.info("💡 **Insight:** Escalated alerts exhibit a significantly higher proportion of outgoing transfers (`chiqim`), as fraudsters drain funds from compromised accounts.")
+        oof_preds[val_idx] = model.predict_proba(X.iloc[val_idx])[:, 1]
+        test_preds += model.predict_proba(X_test)[:, 1] / skf.n_splits
 
-    st.divider()
+        fold_auc = roc_auc_score(y.iloc[val_idx], oof_preds[val_idx])
+        print(f"Fold {fold} AUC: {fold_auc:.4f}")
 
-    # CHART 4: Transaction Types (International / Cards / Wire)
-    st.subheader("4. Payment Channel Breakdown (International Wire Risk)")
-    if 'type_ratio_xalqaro' in master_df.columns:
-        fig4 = px.histogram(
-            master_df, x='type_ratio_xalqaro', color='eskalatsiya', barmode='overlay',
-            color_discrete_map={0: '#2E86C1', 1: '#E74C3C'},
-            title="International Transfer Ratio Distribution (`xalqaro`)"
-        )
-        st.plotly_chart(fig4, use_container_width=True)
-        st.info("💡 **Insight:** Signals containing high ratios of international transfers (`xalqaro`) have a much higher likelihood of escalation.")
+    overall_auc = roc_auc_score(y, oof_preds)
+    print(f"Overall OOF AUC: {overall_auc:.4f}")
+    return test_preds
 
-    st.divider()
 
-    # CHART 5: Transaction Size Distributions
-    st.subheader("5. Transaction-Size Distributions (`max_amount` vs `avg_amount`)")
-    if 'max_amount' in master_df.columns and 'avg_amount' in master_df.columns:
-        fig5 = px.scatter(
-            master_df, x='avg_amount', y='max_amount', color='eskalatsiya',
-            color_discrete_map={0: '#2E86C1', 1: '#E74C3C'},
-            labels={'avg_amount': 'Average Amount Index', 'max_amount': 'Maximum Single Amount Index'},
-            title="Average vs. Maximum Transaction Size Index"
-        )
-        st.plotly_chart(fig5, use_container_width=True)
-        st.info("💡 **Insight:** Fraudulent alerts frequently feature extreme maximum single transaction sizes (`max_amount`) relative to their historical average.")
+# --------------------------------------------------------------------------
+# 4. Main
+# --------------------------------------------------------------------------
+def main():
+    train_signals = pd.read_csv("train_signals.csv")
+    train_transactions = pd.read_parquet("train_transactions.parquet")
+    test_signals = pd.read_csv("test_signals.csv")
+    test_transactions = pd.read_parquet("test_transactions.parquet")
 
-    st.divider()
+    print("Building training features...")
+    train_df = build_features(train_signals, train_transactions)
+    print("Building test features...")
+    test_df = build_features(test_signals, test_transactions)
 
-    # CHART 6: Pre-Signal Activity / Burst Velocity
-    st.subheader("6. Pre-Signal Activity Surge (`burst_ratio_3d_30d`)")
-    if 'burst_ratio_3d_30d' in master_df.columns:
-        fig6 = px.box(
-            master_df, x='eskalatsiya', y='burst_ratio_3d_30d', color='eskalatsiya',
-            color_discrete_map={0: '#2E86C1', 1: '#E74C3C'},
-            labels={'eskalatsiya': 'Status', 'burst_ratio_3d_30d': '3-Day to 30-Day Activity Ratio'},
-            title="Short-Term Activity Surge Immediately Before Signal Trigger"
-        )
-        st.plotly_chart(fig6, use_container_width=True)
-        st.info("💡 **Insight:** Pre-signal transaction spikes (`burst_ratio_3d_30d` > 0.50) serve as the strongest single behavioral indicator of true fraud.")
+    make_eda_plots(train_df)
 
-# ==========================================
-# TAB 4: MODELING STRATEGY
-# ==========================================
-with tab5:
-    st.header("EDA-Driven Modeling Strategy & Feature Engineering")
-    st.markdown("""
-    Our Machine Learning pipeline directly translates the insights discovered during EDA into model inputs:
-    
-    1. **Feature Engineering (26 Features Created):**
-       * **Burst Ratios:** Created `burst_ratio_3d_30d` and `amount_ratio_3d_30d` to quantify velocity spikes.
-       * **Channel Breakdown:** Extracted percentage shares of `xalqaro` (international) and `chiqim` (outgoing) transactions.
-       * **Temporal Metrics:** Computed `night_tx_ratio` and time elapsed since the last transaction (`last_tx_days`).
-    
-    2. **Model Choice — LightGBM Classifier:**
-       * Selected **LightGBM** for its superior performance on tabular datasets and ability to handle non-linear feature interactions (e.g., high burst ratio combined with international transfers).
-    
-    3. **Cross-Validation Setup:**
-       * Implemented **5-Fold Stratified Cross-Validation** to ensure every fold maintained the ground-truth 17.18% escalation ratio, preventing class imbalance bias.
-    """)
+    feature_cols = [c for c in train_df.columns if c not in ("signal_id", "signal_sanasi", "eskalatsiya")]
+    test_preds = train_and_predict(train_df, test_df, feature_cols)
 
-# ==========================================
-# TAB 5: CONCLUSION
-# ==========================================
-with tab6:
-    st.header("Conclusion & Key Findings")
-    st.success("""
-    ### Summary of Findings:
-    * **Short-term velocity spikes (`burst_ratio_3d_30d`) and nocturnal transfers (`night_tx_ratio`)** are the strongest behavioral predictors of fraud escalation.
-    * Transforming nearly 7 million raw transaction rows into 26 normalized, signal-level features enabled our LightGBM model to effectively isolate true fraud risks ($1$) from high-volume false alarms ($0$).
-    * All predictions were successfully generated and formatted in `team_Aethera.csv` for submission.
-    """)
+    submission = pd.DataFrame({
+        "signal_id": test_df["signal_id"],
+        "eskalatsiya": test_preds,
+    })
+    submission.to_csv("team_Aethera.csv", index=False)
+    print("Saved submission to team_Aethera.csv")
+
+
+if __name__ == "__main__":
+    main()
